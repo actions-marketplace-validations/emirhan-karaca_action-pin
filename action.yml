@@ -47,15 +47,13 @@ runs:
           FLAGS="$FLAGS --check"
         fi
         if [ -n "$INPUT_DIR" ]; then
-          FLAGS="$FLAGS --dir $INPUT_DIR"
+          FLAGS="$FLAGS --dir \"$INPUT_DIR\""
         fi
 
         if command -v action-pin >/dev/null 2>&1; then
           action-pin $FLAGS
-        elif [ -f "$ACTION_PATH/cmd/action-pin/main.go" ] && command -v go >/dev/null 2>&1; then
+        elif [ -f "$ACTION_PATH/cmd/action-pin/main.go" ] && [ -f "$ACTION_PATH/go.mod" ] && [ "$ACTION_PATH" = "$PWD" ] && command -v go >/dev/null 2>&1; then
           go run "$ACTION_PATH/cmd/action-pin" $FLAGS
-        elif command -v go >/dev/null 2>&1 && [ "$INPUT_VERSION" != "latest" ]; then
-          go run github.com/emirhan-karaca/action-pin/cmd/action-pin@${INPUT_VERSION} $FLAGS
         else
           echo "Downloading action-pin release..."
           RAW_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -76,7 +74,7 @@ runs:
           TAG="$INPUT_VERSION"
           if [ "$TAG" = "latest" ]; then
             TAG=$(curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/emirhan-karaca/action-pin/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-            if [ -z "$TAG" ]; then TAG="v0.1.0"; fi
+            if [ -z "$TAG" ]; then TAG="v1.0.0"; fi
           fi
 
           VERSION_NUM="${TAG#v}"

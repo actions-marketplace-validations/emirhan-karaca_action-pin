@@ -1,9 +1,9 @@
 # action-pin 📌
 
 [![CI](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml/badge.svg)](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/emirhan-karaca/action-pin)](https://goreportcard.com/report/github.com/emirhan-karaca/action-pin)
+[![Go Reference](https://pkg.go.dev/badge/github.com/emirhan-karaca/action-pin.svg)](https://pkg.go.dev/github.com/emirhan-karaca/action-pin)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
 [![Release](https://img.shields.io/github/v/release/emirhan-karaca/action-pin?logo=github)](https://github.com/emirhan-karaca/action-pin/releases)
 
 > **Secure your GitHub Actions CI/CD workflows by pinning third-party actions to immutable commit SHAs — without breaking your formatting or losing your comments.**
@@ -104,9 +104,11 @@ Success: Pinned 1 action(s) across 1 file(s) (Checked 1 file(s))
 | `--fix` | `false` | Fix workflows in place by pinning actions to commit SHAs |
 | `--dir` | `.github/workflows` | Directory containing workflow files |
 | `--file` | `""` | Target a single workflow file (e.g. `--file .github/workflows/deploy.yml`) |
-| `--token` | `$GITHUB_TOKEN` | GitHub Personal Access Token (prevents rate limits on large suites) |
+| `--token` | `$GITHUB_TOKEN` | GitHub Personal Access Token (checks `--token`, `$GITHUB_TOKEN`, or `$GH_TOKEN`) |
 | `--verbose` | `false` | Enable verbose logging of inspected actions |
 | `--version` | `false` | Print version and build information |
+
+> **Note**: If invoked without flags, `action-pin` runs in check mode by default (`--check --dir .github/workflows`).
 
 ---
 
@@ -123,6 +125,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   verify-pinned-actions:
     runs-on: ubuntu-latest
@@ -131,11 +136,20 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 [pinned by action-pin]
 
       - name: Verify all actions are pinned
-        uses: emirhan-karaca/action-pin@v1
-        with:
-          check: 'true'
-          token: ${{ github.token }}
+        uses: emirhan-karaca/action-pin@19eaee268dfef12c6a0840b284e3a95eb9c0a68c # v1.0.0 [pinned by action-pin]
 ```
+
+> **Tip**: You can initially add it as `uses: emirhan-karaca/action-pin@v1` and then run `action-pin --fix` to pin it to an immutable commit SHA!
+
+### Action Inputs
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `check` | `'true'` | Fail workflow if unpinned actions are found |
+| `fix` | `'false'` | Automatically fix and pin actions in place |
+| `dir` | `'.github/workflows'` | Directory containing workflow files |
+| `token` | `${{ github.token }}` | GitHub token to avoid API rate limits |
+| `version` | `'latest'` | Version of action-pin binary to download |
 
 ---
 
