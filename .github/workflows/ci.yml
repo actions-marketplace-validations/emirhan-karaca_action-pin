@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test (${{ matrix.os }}, Go ${{ matrix.go-version }})
@@ -14,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go-version: ['1.22', '1.23']
+        go-version: ['1.22.x', '1.23.x']
 
     steps:
       - name: Checkout repository
