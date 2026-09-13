@@ -2,11 +2,24 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+type mockResolver struct {
+	sha   string
+	err   error
+	calls []string
+}
+
+func (r *mockResolver) Resolve(_ context.Context, owner, repo, ref string) (string, error) {
+	r.calls = append(r.calls, owner+"/"+repo+"@"+ref)
+	return r.sha, r.err
+}
 
 func TestCLI_Version(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -31,6 +44,7 @@ func TestCLI_CheckAndFixConflict(t *testing.T) {
 }
 
 func TestCLI_CheckMode_UnpinnedAndPinned(t *testing.T) {
+	res := &mockResolver{sha: "b4ffde65f46336ab88eb53be808477a3936bae11"}
 	tempDir := t.TempDir()
 	workflowFile := filepath.Join(tempDir, "ci.yml")
 
@@ -47,23 +61,29 @@ jobs:
 	}
 
 	var stdout, stderr bytes.Buffer
-	code := run([]string{"--check", "--file", workflowFile}, &stdout, &stderr)
+	code := runWithResolver([]string{"--check", "--file", workflowFile}, &stdout, &stderr, res)
 	if code != 1 {
 		t.Fatalf("expected exit code 1 for unpinned actions, got %d. stderr: %s, stdout: %s", code, stderr.String(), stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "[UNPINNED]") {
 		t.Errorf("expected [UNPINNED] in stdout, got: %s", stdout.String())
 	}
+	if len(res.calls) != 0 {
+		t.Fatalf("check called resolver: %v", res.calls)
+	}
 
 	// 2. Fix it
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"--fix", "--file", workflowFile}, &stdout, &stderr)
+	code = runWithResolver([]string{"--fix", "--file", workflowFile}, &stdout, &stderr, res)
 	if code != 0 {
 		t.Fatalf("expected exit code 0 for fix, got %d. stderr: %s", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "[PINNED]") {
 		t.Errorf("expected [PINNED] in stdout, got: %s", stdout.String())
+	}
+	if len(res.calls) != 1 || res.calls[0] != "actions/checkout@v4" {
+		t.Fatalf("unexpected fix resolution calls: %v", res.calls)
 	}
 
 	// Verify file content was updated
@@ -78,7 +98,7 @@ jobs:
 	// 3. Re-run check on now-pinned workflow
 	stdout.Reset()
 	stderr.Reset()
-	code = run([]string{"--check", "--file", workflowFile}, &stdout, &stderr)
+	code = runWithResolver([]string{"--check", "--file", workflowFile}, &stdout, &stderr, res)
 	if code != 0 {
 		t.Fatalf("expected exit code 0 after pinning, got %d. stderr: %s", code, stderr.String())
 	}
@@ -236,3 +256,99 @@ jobs:
 	}
 }
 
+func TestCLI_OfflineChecks(t *testing.T) {
+	const input = "jobs:\n  test:\n    steps:\n      - uses: nonexistent-owner/nonexistent-repo@missing-tag\n"
+	for _, target := range []string{"--file", "--dir"} {
+		for _, explicitCheck := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/check=%t", target, explicitCheck), func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "ci.yml")
+				if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+					t.Fatal(err)
+				}
+				args := []string{target, path}
+				if target == "--dir" {
+					args[1] = dir
+				}
+				if explicitCheck {
+					args = append(args, "--check")
+				}
+				res := &mockResolver{err: fmt.Errorf("network unavailable")}
+				var stdout, stderr bytes.Buffer
+				code := runWithResolver(args, &stdout, &stderr, res)
+				if code != 1 || !strings.Contains(stdout.String(), "[UNPINNED]") || !strings.Contains(stdout.String(), "nonexistent-owner/nonexistent-repo@missing-tag") {
+					t.Fatalf("check did not report unpinned ref: code=%d stdout=%s stderr=%s", code, &stdout, &stderr)
+				}
+				if len(res.calls) != 0 {
+					t.Fatalf("offline check attempted resolution: %v", res.calls)
+				}
+				if strings.Contains(stdout.String(), "suggested:") || strings.Contains(stderr.String(), "network unavailable") {
+					t.Fatalf("offline check emitted resolution output: stdout=%s stderr=%s", &stdout, &stderr)
+				}
+				output, err := os.ReadFile(path)
+				if err != nil || string(output) != input {
+					t.Fatalf("check changed source: %q, err=%v", output, err)
+				}
+			})
+		}
+	}
+}
+
+func TestCLI_Resolve(t *testing.T) {
+	const sha = "b4ffde65f46336ab88eb53be808477a3936bae11"
+	const input = "uses: actions/checkout@v4\n"
+	for _, tc := range []struct {
+		name   string
+		flags  []string
+		fix    bool
+		resErr error
+	}{
+		{name: "default-check-with-resolution", flags: []string{"--resolve"}},
+		{name: "explicit-check-with-resolution", flags: []string{"--check", "--resolve"}},
+		{name: "fix-with-resolution", flags: []string{"--fix", "--resolve"}, fix: true},
+		{name: "resolution-error", flags: []string{"--resolve"}, resErr: fmt.Errorf("network unavailable")},
+	} {
+		for _, target := range []string{"--file", "--dir"} {
+			t.Run(tc.name+"/"+target, func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "ci.yml")
+				if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+					t.Fatal(err)
+				}
+				args := []string{target, path}
+				if target == "--dir" {
+					args[1] = dir
+				}
+				args = append(args, tc.flags...)
+				res := &mockResolver{sha: sha, err: tc.resErr}
+				var stdout, stderr bytes.Buffer
+				code := runWithResolver(args, &stdout, &stderr, res)
+				wantCode := 1
+				if tc.fix {
+					wantCode = 0
+				}
+				if code != wantCode || len(res.calls) != 1 || res.calls[0] != "actions/checkout@v4" {
+					t.Fatalf("unexpected result: code=%d calls=%v stdout=%s stderr=%s", code, res.calls, &stdout, &stderr)
+				}
+				output, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !tc.fix && string(output) != input {
+					t.Fatal("resolved check changed source")
+				}
+				if tc.resErr != nil {
+					if !strings.Contains(stderr.String(), "network unavailable") || strings.Contains(stdout.String(), "suggested:") {
+						t.Fatalf("expected resolution error without suggestion: stdout=%s stderr=%s", &stdout, &stderr)
+					}
+				} else if tc.fix {
+					if !strings.Contains(string(output), "actions/checkout@"+sha) || !strings.Contains(stdout.String(), "[PINNED]") {
+						t.Fatalf("fix failed: output=%s stdout=%s", output, &stdout)
+					}
+				} else if !strings.Contains(stdout.String(), "(suggested: "+sha+")") {
+					t.Fatalf("missing suggested SHA: %s", &stdout)
+				}
+			})
+		}
+	}
+}

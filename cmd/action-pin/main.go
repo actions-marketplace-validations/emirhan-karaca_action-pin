@@ -26,11 +26,16 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithResolver(args, stdout, stderr, nil)
+}
+
+func runWithResolver(args []string, stdout, stderr io.Writer, res resolver.Resolver) int {
 	fs := flag.NewFlagSet("action-pin", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	checkFlag := fs.Bool("check", false, "Check for unpinned actions (exits with code 1 if unpinned actions exist)")
+	checkFlag := fs.Bool("check", false, "Check for unpinned actions offline (default; exits with code 1 if any exist)")
 	fixFlag := fs.Bool("fix", false, "Fix workflows in place by pinning actions to commit SHAs")
+	resolveFlag := fs.Bool("resolve", false, "Resolve suggested commit SHAs during checks (requires network; implied by --fix)")
 	dirFlag := fs.String("dir", ".github/workflows", "Directory containing workflow files")
 	fileFlag := fs.String("file", "", "Target a specific workflow file instead of a directory")
 	tokenFlag := fs.String("token", "", "GitHub personal access token (defaults to GITHUB_TOKEN or GH_TOKEN env)")
@@ -65,17 +70,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// Default to check mode if neither --check nor --fix is passed
 	fix := *fixFlag
 
-	// Resolve GitHub token
-	token := *tokenFlag
-	if token == "" {
-		token = os.Getenv("GITHUB_TOKEN")
+	// Offline checks need neither GitHub credentials nor a resolver.
+	if res == nil && (fix || *resolveFlag) {
+		token := *tokenFlag
 		if token == "" {
-			token = os.Getenv("GH_TOKEN")
+			token = os.Getenv("GITHUB_TOKEN")
+			if token == "" {
+				token = os.Getenv("GH_TOKEN")
+			}
 		}
+		res = resolver.New(resolver.WithToken(token))
 	}
 
-	res := resolver.New(resolver.WithToken(token))
-	p := pinner.New(res)
+	p := pinner.New(res, pinner.WithResolve(*resolveFlag))
 	ctx := context.Background()
 
 	if *fileFlag != "" {
@@ -87,11 +94,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 
 		for _, f := range findings {
-			if fix {
-				fmt.Fprintf(stdout, "[PINNED]   %s:%d: %s -> %s\n", filepath.ToSlash(f.File), f.Line, f.Action, f.ResolvedSHA)
-			} else {
-				fmt.Fprintf(stdout, "[UNPINNED] %s:%d: %s (suggested: %s)\n", filepath.ToSlash(f.File), f.Line, f.Action, f.ResolvedSHA)
-			}
+			printFinding(stdout, f, fix)
 		}
 
 		if len(findings) == 0 {
@@ -141,11 +144,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	if *verboseFlag || len(result.Findings) > 0 {
 		for _, f := range result.Findings {
-			if fix {
-				fmt.Fprintf(stdout, "[PINNED]   %s:%d: %s -> %s\n", filepath.ToSlash(f.File), f.Line, f.Action, f.ResolvedSHA)
-			} else {
-				fmt.Fprintf(stdout, "[UNPINNED] %s:%d: %s (suggested: %s)\n", filepath.ToSlash(f.File), f.Line, f.Action, f.ResolvedSHA)
-			}
+			printFinding(stdout, f, fix)
 		}
 	}
 
@@ -173,4 +172,16 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "\nCheck failed: Found %d unpinned action(s) across %d file(s).\n", result.UnpinnedCount, result.FilesChecked)
 	fmt.Fprintf(stderr, "Run 'action-pin --fix --dir %s' to pin them automatically.\n", filepath.ToSlash(dir))
 	return 1
+}
+
+func printFinding(stdout io.Writer, f pinner.Finding, fix bool) {
+	if fix {
+		fmt.Fprintf(stdout, "[PINNED]   %s:%d: %s -> %s\n", filepath.ToSlash(f.File), f.Line, f.Action, f.ResolvedSHA)
+		return
+	}
+	fmt.Fprintf(stdout, "[UNPINNED] %s:%d: %s", filepath.ToSlash(f.File), f.Line, f.Action)
+	if f.ResolvedSHA != "" {
+		fmt.Fprintf(stdout, " (suggested: %s)", f.ResolvedSHA)
+	}
+	fmt.Fprintln(stdout)
 }
