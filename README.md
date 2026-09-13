@@ -3,7 +3,7 @@
 [![CI](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml/badge.svg)](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/emirhan-karaca/action-pin.svg)](https://pkg.go.dev/github.com/emirhan-karaca/action-pin)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go Version](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go)](https://go.dev)
+[![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
 [![Release](https://img.shields.io/github/v/release/emirhan-karaca/action-pin?logo=github)](https://github.com/emirhan-karaca/action-pin/releases)
 
 > **Secure your GitHub Actions CI/CD workflows by pinning third-party actions to immutable commit SHAs — without breaking your formatting or losing your comments.**
@@ -16,14 +16,15 @@ In GitHub Actions, referencing actions by mutable tags (e.g., `uses: actions/che
 
 1. **Tag Hijacking**: If a maintainer's account or repo is compromised, an attacker can move the `v4` tag to malicious code.
 2. **Untracked Code Drift**: An author may push bug fixes or breaking changes under the same tag, causing unexpected CI failures.
-3. **OpenSSF & SLSA Compliance**: Security frameworks like OpenSSF Scorecard and SLSA mandate pinning all CI dependencies to full 40-character commit hashes.
+3. **Reviewable Dependencies**: Full commit hashes identify the exact action revision being reviewed and executed. Pinning is one part of securing a build; it does not alone establish compliance with a security framework.
 
 ### The Problem With Existing Pinning Tools
 Traditional regex-based or naive YAML re-formatters strip comments, reorder dictionary keys, collapse multi-line scripts, or mangle custom indentation.
 
 ### How `action-pin` Solves It
-- 🧠 **AST-Preserving**: Powered by `gopkg.in/yaml.v3` node traversal. Comments, spacing, and quotes remain strictly intact.
+- 🧠 **Format-Preserving**: Uses `gopkg.in/yaml.v3` node positions to edit ordinary single-line action references in place, preserving surrounding comments, spacing, quotes, and line endings. Complex scalar syntax (such as anchors, explicit tags, or multiline values) falls back to YAML encoding, which may normalize formatting.
 - 💬 **Human-Readable Annotations**: Automatically appends the original tag name as a comment: `# <tag> [pinned by action-pin]`.
+- 🔌 **Offline Checks**: Detects unpinned references without credentials or network access. Opt in to SHA suggestions with `--resolve`, or resolve and write with `--fix`.
 - ⚡ **Zero-Config & Resilient**: Resolves refs via GitHub REST API (supporting `GITHUB_TOKEN`), with an automated fallback to `git ls-remote` when rate-limited.
 - 🔁 **Fully Idempotent**: Safe to run on every commit or in pre-commit hooks.
 
@@ -55,6 +56,8 @@ Traditional regex-based or naive YAML re-formatters strip comments, reorder dict
 
 ### Installation
 
+The offline checks and `--resolve` examples below describe the current source and are not yet in v1.0.0. From a checkout containing these changes, try `go run ./cmd/action-pin --check`, or install that checkout with `go install ./cmd/action-pin`.
+
 #### Pre-built Binaries (Linux, macOS, Windows)
 Download the latest binary for your operating system and architecture from [GitHub Releases](https://github.com/emirhan-karaca/action-pin/releases).
 
@@ -63,12 +66,14 @@ Download the latest binary for your operating system and architecture from [GitH
 go install github.com/emirhan-karaca/action-pin/cmd/action-pin@latest
 ```
 
+Release downloads and `@latest` use the latest published version. Until a new release includes these changes, its checks still resolve online and it does not accept `--resolve`.
+
 ---
 
 ## CLI Usage
 
 ### Check Mode (CI Friendly)
-Verifies whether any workflow contains unpinned actions. Returns exit code `1` if unpinned actions exist:
+Checks whether any workflow contains unpinned actions, without network access or credentials. Returns exit code `1` if unpinned actions exist. This checks the reference format; it does not verify that a repository, tag, or pinned commit exists:
 
 ```bash
 action-pin --check
@@ -76,11 +81,19 @@ action-pin --check
 
 Output:
 ```text
-[UNPINNED] .github/workflows/ci.yml:14: actions/checkout@v4 (suggested: 11d5960a326750d5838078e36cf38b85af677262)
+[UNPINNED] .github/workflows/ci.yml:14: actions/checkout@v4
 
 Check failed: Found 1 unpinned action(s) across 1 file(s).
 Run 'action-pin --fix --dir .github/workflows' to pin them automatically.
 ```
+
+To also resolve suggested commit SHAs without changing files, use:
+
+```bash
+action-pin --check --resolve
+```
+
+This opt-in mode requires network access. Set `GITHUB_TOKEN` or `GH_TOKEN` when checking private repositories or to avoid unauthenticated API rate limits. Resolution errors fail the check.
 
 ### Fix Mode (In-Place Update)
 Rewrites workflows in place, resolving tags to immutable 40-character commit SHAs:
@@ -100,11 +113,12 @@ Success: Pinned 1 action(s) across 1 file(s) (Checked 1 file(s))
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--check` | `false` | Check for unpinned actions (exits with code 1 if unpinned actions exist) |
+| `--check` | `false` | Check for unpinned actions offline (exits with code 1 if unpinned actions exist) |
 | `--fix` | `false` | Fix workflows in place by pinning actions to commit SHAs |
+| `--resolve` | `false` | Resolve suggested SHAs during checks; requires network access and is implied by `--fix` |
 | `--dir` | `.github/workflows` | Directory containing workflow files |
 | `--file` | `""` | Target a single workflow file (e.g. `--file .github/workflows/deploy.yml`) |
-| `--token` | `$GITHUB_TOKEN` | GitHub Personal Access Token (checks `--token`, `$GITHUB_TOKEN`, or `$GH_TOKEN`) |
+| `--token` | `$GITHUB_TOKEN` | Token for `--fix` or `--resolve` (checks `--token`, `$GITHUB_TOKEN`, then `$GH_TOKEN`); unused by offline checks |
 | `--verbose` | `false` | Enable verbose logging of inspected actions |
 | `--version` | `false` | Print version and build information |
 
@@ -114,7 +128,9 @@ Success: Pinned 1 action(s) across 1 file(s) (Checked 1 file(s))
 
 ## GitHub Action Integration (1-Line CI)
 
-Integrate `action-pin` directly into your CI pipeline using the official Composite Action:
+Integrate `action-pin` directly into your CI pipeline using the composite Action. By default, it builds the source from the selected Action checkout with Go 1.22 or newer. Pinning the Action to a full commit SHA therefore also selects the program source being executed.
+
+The inputs below describe the current source. Older releases, including v1.0.0, have different defaults. Replace `REPLACE_WITH_FULL_COMMIT_SHA` with a reviewed 40-character commit SHA containing these changes. Ensure a supported Go toolchain is available on your runner before this step.
 
 ```yaml
 name: Security & Pinning Check
@@ -136,10 +152,26 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 [pinned by action-pin]
 
       - name: Verify all actions are pinned
-        uses: emirhan-karaca/action-pin@19eaee268dfef12c6a0840b284e3a95eb9c0a68c # v1.0.0 [pinned by action-pin]
+        uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
 ```
 
-> **Tip**: You can initially add it as `uses: emirhan-karaca/action-pin@v1` and then run `action-pin --fix` to pin it to an immutable commit SHA!
+The build may need network access to download Go modules on the first run; it uses the checkout's `go.mod` and `go.sum` with `-mod=readonly`. The resulting CLI check itself is offline. The Action ignores any `action-pin` binary already on `PATH` and runs in the caller's working directory, so `dir` remains relative to your repository.
+
+### Using a Verified Release Binary
+
+To avoid building from source, select an exact release tag and provide the SHA-256 of its archive for your runner's operating system and architecture:
+
+```yaml
+- name: Verify all actions are pinned
+  uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
+  with:
+    version: 'v1.0.0'
+    checksum: 'REPLACE_WITH_64_CHARACTER_ARCHIVE_SHA256'
+```
+
+Review the release's `checksums.txt` and copy the matching archive digest into your workflow. A Linux amd64 archive is named `action-pin_1.0.0_linux_amd64.tar.gz`; Windows uses `.zip`. Each runner platform needs its own digest. The Action verifies the download before extraction or execution and fails on a missing or mismatched checksum. `latest` and branch names are rejected.
+
+Release mode runs that release's CLI behavior. In particular, v1.0.0 checks resolve references online and do not support `--resolve`; use source mode for the new offline behavior until it is included in a release.
 
 ### Action Inputs
 
@@ -149,7 +181,11 @@ jobs:
 | `fix` | `'false'` | Automatically fix and pin actions in place |
 | `dir` | `'.github/workflows'` | Directory containing workflow files |
 | `token` | `${{ github.token }}` | GitHub token to avoid API rate limits |
-| `version` | `'latest'` | Version of action-pin binary to download |
+| `version` | `'source'` | Build the selected Action checkout, or download an exact release tag such as `v1.0.0` |
+| `checksum` | `''` | Required 64-character SHA-256 of the runner's release archive when `version` is a release tag; leave empty in source mode |
+| `resolve` | `'false'` | Resolve suggested SHAs in check mode; requires network access |
+
+`fix: 'true'` takes precedence over `check` and always resolves references. Otherwise the Action checks workflows, including when both `check` and `fix` are `'false'`. Boolean inputs accept only `'true'` or `'false'`.
 
 ---
 
@@ -160,7 +196,7 @@ jobs:
 - **Local Actions**: Ignores relative paths like `./.github/actions/my-action`.
 - **Docker Actions**: Ignores `docker://` container actions.
 - **Reusable Workflows**: Seamlessly pins calls to external reusable workflows.
-- **Offline / Rate-Limit Fallback**: Automatically invokes `git ls-remote` when GitHub API limits or errors occur.
+- **Offline Checks / Rate-Limit Fallback**: Default checks do not use the network. During `--fix` or `--resolve`, GitHub API errors can fall back to `git ls-remote`, which also requires network access.
 - **Performance Caching**: Caches resolved SHAs in-memory during execution to eliminate duplicate network calls.
 
 ---

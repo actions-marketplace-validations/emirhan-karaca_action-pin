@@ -10,6 +10,7 @@ Thank you for your interest in contributing to `action-pin`! We welcome contribu
 
 - **Go**: Version 1.22 or newer ([go.dev/dl](https://go.dev/dl/))
 - **Git**: Latest version ([git-scm.com](https://git-scm.com/))
+- **Bash**: Required for composite Action integration tests (Git Bash on Windows), with `tar`, `unzip`, and `sha256sum` or `shasum`
 - *(Optional)* **GoReleaser**: For testing packaging builds locally
 
 ### Clone and Verify
@@ -29,6 +30,8 @@ go test -v ./...
 go vet ./...
 ```
 
+The CLI and Action launcher tests use local resolver mocks and generated release archives, so they do not contact GitHub. Go may download modules during initial setup. Launcher tests skip when Bash is unavailable; the CI matrix includes Bash on Linux, macOS, and Windows.
+
 ---
 
 ## Project Structure
@@ -36,6 +39,7 @@ go vet ./...
 ```
 action-pin/
 ├── action.yml               # Composite GitHub Action for CI pipelines
+├── scripts/run-action.sh    # Source build or checksum-verified release launcher
 ├── .goreleaser.yaml         # Multi-platform release definitions
 ├── .github/
 │   └── workflows/
@@ -46,6 +50,8 @@ action-pin/
 │       ├── main.go          # CLI entrypoint and flag parsing
 │       └── main_test.go     # CLI integration tests
 └── internal/
+    ├── actionrunner/
+    │   └── runner_test.go   # Launcher integration tests with local command mocks
     ├── action/
     │   ├── action.go        # GitHub Action reference parsing
     │   └── action_test.go   # Parsing tests

@@ -153,7 +153,7 @@ func (r *GitHubResolver) setHeaders(req *http.Request) {
 
 func (r *GitHubResolver) resolveViaAPI(ctx context.Context, owner, repo, ref string) (string, error) {
 	// 1. Try /repos/{owner}/{repo}/commits/{ref}
-	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s", r.BaseURL, owner, repo, ref)
+	commitURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s", r.BaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, commitURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create commit request: %w", err)
@@ -172,7 +172,7 @@ func (r *GitHubResolver) resolveViaAPI(ctx context.Context, owner, repo, ref str
 	}
 
 	// 2. If /commits/{ref} failed (e.g. 422 for annotated tags or 404), try /repos/{owner}/{repo}/git/ref/tags/{ref}
-	tagRefURL := fmt.Sprintf("%s/repos/%s/%s/git/ref/tags/%s", r.BaseURL, owner, repo, ref)
+	tagRefURL := fmt.Sprintf("%s/repos/%s/%s/git/ref/tags/%s", r.BaseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(ref))
 	req2, err := http.NewRequestWithContext(ctx, http.MethodGet, tagRefURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create tag ref request: %w", err)
@@ -237,7 +237,11 @@ func (r *GitHubResolver) resolveViaGit(ctx context.Context, owner, repo, ref str
 
 	out, err := r.GitExec(ctx, args...)
 	if err != nil {
-		return "", fmt.Errorf("git ls-remote failed: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		message := fmt.Sprintf("git ls-remote failed: %v (output: %s)", err, strings.TrimSpace(string(out)))
+		if r.Token != "" {
+			message = strings.ReplaceAll(message, r.Token, "[REDACTED]")
+		}
+		return "", fmt.Errorf("%s", message)
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(out))
