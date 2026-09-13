@@ -22,7 +22,7 @@ In GitHub Actions, referencing actions by mutable tags (e.g., `uses: actions/che
 Traditional regex-based or naive YAML re-formatters strip comments, reorder dictionary keys, collapse multi-line scripts, or mangle custom indentation.
 
 ### How `action-pin` Solves It
-- 🧠 **AST-Preserving**: Powered by `gopkg.in/yaml.v3` node traversal. Comments, spacing, and quotes remain strictly intact.
+- 🧠 **Format-Preserving**: Uses `gopkg.in/yaml.v3` node positions to edit ordinary single-line action references in place, preserving surrounding comments, spacing, quotes, and line endings. Complex scalar syntax (such as anchors, explicit tags, or multiline values) falls back to YAML encoding, which may normalize formatting.
 - 💬 **Human-Readable Annotations**: Automatically appends the original tag name as a comment: `# <tag> [pinned by action-pin]`.
 - ⚡ **Zero-Config & Resilient**: Resolves refs via GitHub REST API (supporting `GITHUB_TOKEN`), with an automated fallback to `git ls-remote` when rate-limited.
 - 🔁 **Fully Idempotent**: Safe to run on every commit or in pre-commit hooks.

@@ -5,11 +5,47 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/emirhan-karaca/action-pin/internal/resolver"
 )
+
+func TestResolve_RefURLCharacters(t *testing.T) {
+	for _, ref := range []string{"release/v1", "release#1", "release%23v1"} {
+		t.Run(ref, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.URL.Path != "/repos/actions/checkout/commits/"+ref || req.URL.RawQuery != "" {
+					t.Errorf("unexpected request URL: %s", req.URL)
+				}
+				fmt.Fprintf(w, `{"sha": %q}`, dummySha1)
+			}))
+			defer server.Close()
+			r := resolver.New(resolver.WithBaseURL(server.URL))
+			sha, err := r.Resolve(context.Background(), "actions", "checkout", ref)
+			if err != nil || sha != dummySha1 {
+				t.Fatalf("got %q, %v", sha, err)
+			}
+		})
+	}
+}
+
+func TestResolve_GitErrorsRedactToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		http.Error(w, "unavailable", http.StatusForbidden)
+	}))
+	defer server.Close()
+	const token = "test-secret-token"
+	r := resolver.New(resolver.WithBaseURL(server.URL), resolver.WithToken(token),
+		resolver.WithGitExec(func(ctx context.Context, args ...string) ([]byte, error) {
+			return []byte("fatal: unable to access " + args[1]), fmt.Errorf("authentication failed for %s", token)
+		}))
+	_, err := r.Resolve(context.Background(), "actions", "checkout", "v4")
+	if err == nil || strings.Contains(err.Error(), token) || !strings.Contains(err.Error(), "[REDACTED]") {
+		t.Fatalf("expected redacted error, got %v", err)
+	}
+}
 
 const (
 	dummySha1 = "b4ffde65f46336ab88eb53be808477a3936bae11"

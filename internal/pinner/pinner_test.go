@@ -8,11 +8,64 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/emirhan-karaca/action-pin/internal/pinner"
 )
 
 type mockResolver struct {
 	mapping map[string]string
+}
+
+func TestPinner_ExactSourcePreservation(t *testing.T) {
+	const sha = "b4ffde65f46336ab88eb53be808477a3936bae11"
+	p := pinner.New(&mockResolver{mapping: map[string]string{"actions/checkout@v4": sha}})
+	cases := []struct{ name, input, want string }{
+		{"indent-and-comments", "# header\njobs:\n    build:\n        steps:\n        - uses: actions/checkout@v4  # needed for history\n\n        - run: |\n            echo hello\n", "# header\njobs:\n    build:\n        steps:\n        - uses: actions/checkout@" + sha + "  # needed for history; v4 [pinned by action-pin]\n\n        - run: |\n            echo hello\n"},
+		{"crlf", "uses: actions/checkout@v4\r\n", "uses: actions/checkout@" + sha + " # v4 [pinned by action-pin]\r\n"},
+		{"no-final-newline", "uses: 'actions/checkout@v4'", "uses: 'actions/checkout@" + sha + "' # v4 [pinned by action-pin]"},
+		{"flow-unicode", "{name: Türkçe, uses: \"actions/checkout@v4\", with: {fetch-depth: 0}}\n", "{name: Türkçe, uses: \"actions/checkout@" + sha + "\", with: {fetch-depth: 0}} # v4 [pinned by action-pin]\n"},
+		{"documents", "---\nuses: actions/checkout@v4\n...\n---\nuses: ./local\n", "---\nuses: actions/checkout@" + sha + " # v4 [pinned by action-pin]\n...\n---\nuses: ./local\n"},
+		{"bom", "\ufeffuses: actions/checkout@v4\n", "\ufeffuses: actions/checkout@" + sha + " # v4 [pinned by action-pin]\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, findings, err := p.ProcessContent(context.Background(), "ci.yml", []byte(tc.input), true)
+			if err != nil || len(findings) != 1 {
+				t.Fatalf("fix: findings=%v err=%v", findings, err)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("got %q\nwant %q", out, tc.want)
+			}
+			again, findings, err := p.ProcessContent(context.Background(), "ci.yml", out, true)
+			if err != nil || len(findings) != 0 || string(again) != string(out) {
+				t.Fatalf("not idempotent: %q %v %v", again, findings, err)
+			}
+		})
+	}
+}
+
+func TestPinner_ComplexScalarFallbackPreservesComments(t *testing.T) {
+	const sha = "b4ffde65f46336ab88eb53be808477a3936bae11"
+	p := pinner.New(&mockResolver{mapping: map[string]string{"actions/checkout@v4": sha}})
+	for _, input := range []string{
+		"uses: >- # keep this\n  actions/checkout@v4\n",
+		"uses: &checkout actions/checkout@v4 # keep this\nother: *checkout\n",
+		"uses: !!str actions/checkout@v4 # keep this\n",
+		"uses: \"actions/checkout@v\\x34\" # keep this\n",
+	} {
+		out, _, err := p.ProcessContent(context.Background(), "ci.yml", []byte(input), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded map[string]interface{}
+		if err := yaml.Unmarshal(out, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded["uses"] != "actions/checkout@"+sha || !strings.Contains(string(out), "keep this") {
+			t.Fatalf("lost action or comment: %s", out)
+		}
+	}
 }
 
 func (m *mockResolver) Resolve(ctx context.Context, owner, repo, ref string) (string, error) {
@@ -373,4 +426,3 @@ jobs:
 		t.Errorf("single quote style not preserved:\n%s", fixedStr)
 	}
 }
-

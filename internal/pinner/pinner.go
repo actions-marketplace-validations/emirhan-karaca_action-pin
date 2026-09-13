@@ -69,8 +69,9 @@ func (p *Pinner) ProcessContent(ctx context.Context, filename string, content []
 	}
 
 	var findings []Finding
+	var edits []sourceEdit
 	for _, doc := range docs {
-		docFindings, err := p.traverseAndPin(ctx, filename, doc, fix)
+		docFindings, err := p.traverseAndPin(ctx, filename, doc, fix, &edits)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -79,6 +80,9 @@ func (p *Pinner) ProcessContent(ctx context.Context, filename string, content []
 
 	if !fix || len(findings) == 0 {
 		return content, findings, nil
+	}
+	if updated, ok := applySourceEdits(content, edits); ok {
+		return updated, findings, nil
 	}
 
 	var buf bytes.Buffer
@@ -97,7 +101,7 @@ func (p *Pinner) ProcessContent(ctx context.Context, filename string, content []
 }
 
 // traverseAndPin searches a YAML node tree for `uses:` keys and pins them.
-func (p *Pinner) traverseAndPin(ctx context.Context, filename string, node *yaml.Node, fix bool) ([]Finding, error) {
+func (p *Pinner) traverseAndPin(ctx context.Context, filename string, node *yaml.Node, fix bool, edits *[]sourceEdit) ([]Finding, error) {
 	var findings []Finding
 
 	var walk func(n *yaml.Node) error
@@ -135,8 +139,13 @@ func (p *Pinner) traverseAndPin(ctx context.Context, filename string, node *yaml
 						findings = append(findings, finding)
 
 						if fix {
+							*edits = append(*edits, sourceEdit{node: *valNode, value: actRef.PinnedString(sha), comment: actRef.Comment()})
 							valNode.Value = actRef.PinnedString(sha)
-							valNode.LineComment = actRef.Comment()
+							if valNode.LineComment == "" {
+								valNode.LineComment = actRef.Comment()
+							} else {
+								valNode.LineComment += "; " + strings.TrimPrefix(actRef.Comment(), "# ")
+							}
 						}
 					}
 				}
