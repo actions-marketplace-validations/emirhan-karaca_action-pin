@@ -1,6 +1,6 @@
 name: 'action-pin'
 description: 'Pin GitHub Actions to immutable commit SHAs with comments and AST formatting strictly preserved'
-author: 'action-pin'
+author: 'emirhan-karaca'
 branding:
   icon: 'shield'
   color: 'blue'
@@ -40,20 +40,20 @@ runs:
         INPUT_VERSION: ${{ inputs.version }}
         ACTION_PATH: ${{ github.action_path }}
       run: |
-        FLAGS=""
+        ARGS=()
         if [ "$INPUT_FIX" = "true" ]; then
-          FLAGS="$FLAGS --fix"
+          ARGS+=(--fix)
         elif [ "$INPUT_CHECK" = "true" ]; then
-          FLAGS="$FLAGS --check"
+          ARGS+=(--check)
         fi
         if [ -n "$INPUT_DIR" ]; then
-          FLAGS="$FLAGS --dir \"$INPUT_DIR\""
+          ARGS+=(--dir "$INPUT_DIR")
         fi
 
         if command -v action-pin >/dev/null 2>&1; then
-          action-pin $FLAGS
+          action-pin "${ARGS[@]}"
         elif [ -f "$ACTION_PATH/cmd/action-pin/main.go" ] && [ -f "$ACTION_PATH/go.mod" ] && [ "$ACTION_PATH" = "$PWD" ] && command -v go >/dev/null 2>&1; then
-          go run "$ACTION_PATH/cmd/action-pin" $FLAGS
+          go run "$ACTION_PATH/cmd/action-pin" "${ARGS[@]}"
         else
           echo "Downloading action-pin release..."
           RAW_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -83,11 +83,11 @@ runs:
             URL="https://github.com/emirhan-karaca/action-pin/releases/download/${TAG}/action-pin_${VERSION_NUM}_${OS}_${ARCH}.zip"
             curl -sSL "$URL" -o "$TMPDIR/action-pin.zip"
             unzip -q "$TMPDIR/action-pin.zip" -d "$TMPDIR"
-            "$TMPDIR/action-pin.exe" $FLAGS
+            "$TMPDIR/action-pin.exe" "${ARGS[@]}"
           else
             URL="https://github.com/emirhan-karaca/action-pin/releases/download/${TAG}/action-pin_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
             curl -sSL "$URL" | tar -xz -C "$TMPDIR"
             chmod +x "$TMPDIR/action-pin"
-            "$TMPDIR/action-pin" $FLAGS
+            "$TMPDIR/action-pin" "${ARGS[@]}"
           fi
         fi
