@@ -1,0 +1,16 @@
+# Binaries
+/action-pin
+/action-pin.exe
+dist/
+
+# Test coverage
+*.out
+*.test
+
+# IDEs
+.idea/
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db

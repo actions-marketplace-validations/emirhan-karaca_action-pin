@@ -1,0 +1,95 @@
+name: 'action-pin'
+description: 'Pin GitHub Actions to immutable commit SHAs with comments and AST formatting strictly preserved'
+author: 'action-pin'
+branding:
+  icon: 'shield'
+  color: 'blue'
+
+inputs:
+  check:
+    description: 'Check for unpinned actions (fails if unpinned actions are found)'
+    required: false
+    default: 'true'
+  fix:
+    description: 'Fix workflows in place by pinning actions to commit SHAs'
+    required: false
+    default: 'false'
+  dir:
+    description: 'Directory containing workflow files'
+    required: false
+    default: '.github/workflows'
+  token:
+    description: 'GitHub token for API resolution'
+    required: false
+    default: ${{ github.token }}
+  version:
+    description: 'Version of action-pin to use'
+    required: false
+    default: 'latest'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run action-pin
+      shell: bash
+      env:
+        INPUT_CHECK: ${{ inputs.check }}
+        INPUT_FIX: ${{ inputs.fix }}
+        INPUT_DIR: ${{ inputs.dir }}
+        GITHUB_TOKEN: ${{ inputs.token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        FLAGS=""
+        if [ "$INPUT_FIX" = "true" ]; then
+          FLAGS="$FLAGS --fix"
+        elif [ "$INPUT_CHECK" = "true" ]; then
+          FLAGS="$FLAGS --check"
+        fi
+        if [ -n "$INPUT_DIR" ]; then
+          FLAGS="$FLAGS --dir $INPUT_DIR"
+        fi
+
+        if command -v action-pin >/dev/null 2>&1; then
+          action-pin $FLAGS
+        elif [ -f "$ACTION_PATH/cmd/action-pin/main.go" ] && command -v go >/dev/null 2>&1; then
+          go run "$ACTION_PATH/cmd/action-pin" $FLAGS
+        elif command -v go >/dev/null 2>&1 && [ "$INPUT_VERSION" != "latest" ]; then
+          go run github.com/emirhan-karaca/action-pin/cmd/action-pin@${INPUT_VERSION} $FLAGS
+        else
+          echo "Downloading action-pin release..."
+          RAW_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+          case "$RAW_OS" in
+            linux*) OS="linux" ;;
+            darwin*) OS="darwin" ;;
+            msys*|mingw*|cygwin*) OS="windows" ;;
+            *) echo "Unsupported OS: $RAW_OS" && exit 1 ;;
+          esac
+
+          ARCH=$(uname -m)
+          case "$ARCH" in
+            x86_64|amd64) ARCH="amd64" ;;
+            aarch64|arm64) ARCH="arm64" ;;
+            *) echo "Unsupported architecture: $ARCH" && exit 1 ;;
+          esac
+
+          TAG="$INPUT_VERSION"
+          if [ "$TAG" = "latest" ]; then
+            TAG=$(curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos/emirhan-karaca/action-pin/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+            if [ -z "$TAG" ]; then TAG="v0.1.0"; fi
+          fi
+
+          VERSION_NUM="${TAG#v}"
+          TMPDIR=$(mktemp -d)
+          if [ "$OS" = "windows" ]; then
+            URL="https://github.com/emirhan-karaca/action-pin/releases/download/${TAG}/action-pin_${VERSION_NUM}_${OS}_${ARCH}.zip"
+            curl -sSL "$URL" -o "$TMPDIR/action-pin.zip"
+            unzip -q "$TMPDIR/action-pin.zip" -d "$TMPDIR"
+            "$TMPDIR/action-pin.exe" $FLAGS
+          else
+            URL="https://github.com/emirhan-karaca/action-pin/releases/download/${TAG}/action-pin_${VERSION_NUM}_${OS}_${ARCH}.tar.gz"
+            curl -sSL "$URL" | tar -xz -C "$TMPDIR"
+            chmod +x "$TMPDIR/action-pin"
+            "$TMPDIR/action-pin" $FLAGS
+          fi
+        fi
