@@ -194,29 +194,49 @@ func (p *Pinner) traverseAndPin(ctx context.Context, filename string, node *yaml
 
 // ProcessFile processes a single workflow file.
 func (p *Pinner) ProcessFile(ctx context.Context, filePath string, fix bool) ([]Finding, bool, error) {
+	if fix {
+		plan, err := p.PlanFile(ctx, filePath)
+		if err != nil {
+			if plan == nil {
+				return nil, false, err
+			}
+			return plan.Result.Findings, false, err
+		}
+		if err := plan.Apply(ctx); err != nil {
+			return plan.Result.Findings, plan.Result.FilesModified > 0, err
+		}
+		return plan.Result.Findings, plan.Result.FilesModified > 0, nil
+	}
+
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to read file %s: %w", filePath, err)
 	}
 
-	newContent, findings, err := p.ProcessContent(ctx, filePath, content, fix)
+	_, findings, err := p.ProcessContent(ctx, filePath, content, false)
 	if err != nil {
 		return nil, false, err
 	}
 
-	modified := false
-	if fix && len(findings) > 0 && !bytes.Equal(content, newContent) {
-		if err := os.WriteFile(filePath, newContent, 0644); err != nil {
-			return nil, false, fmt.Errorf("failed to write updated file %s: %w", filePath, err)
-		}
-		modified = true
-	}
-
-	return findings, modified, nil
+	return findings, false, nil
 }
 
 // ProcessDirectory scans a directory (and subdirectories) for .yml and .yaml workflow files.
 func (p *Pinner) ProcessDirectory(ctx context.Context, dirPath string, fix bool) (*Result, error) {
+	if fix {
+		plan, err := p.PlanDirectory(ctx, dirPath)
+		if err != nil {
+			if plan == nil {
+				return nil, err
+			}
+			return &plan.Result, err
+		}
+		if err := plan.Apply(ctx); err != nil {
+			return &plan.Result, err
+		}
+		return &plan.Result, nil
+	}
+
 	info, err := os.Stat(dirPath)
 	if err != nil {
 		return nil, fmt.Errorf("workflow directory not found: %w", err)
@@ -241,7 +261,7 @@ func (p *Pinner) ProcessDirectory(ctx context.Context, dirPath string, fix bool)
 		}
 
 		result.FilesChecked++
-		findings, modified, err := p.ProcessFile(ctx, path, fix)
+		findings, modified, err := p.ProcessFile(ctx, path, false)
 		if err != nil {
 			return err
 		}

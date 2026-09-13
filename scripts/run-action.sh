@@ -8,12 +8,18 @@ fail() {
 
 version="${INPUT_VERSION:-source}"
 checksum="${INPUT_CHECKSUM:-}"
-for value in "${INPUT_CHECK:-true}" "${INPUT_FIX:-false}" "${INPUT_RESOLVE:-false}"; do
-  case "$value" in true|false) ;; *) fail 'check, fix, and resolve must be true or false' ;; esac
+for value in "${INPUT_CHECK:-true}" "${INPUT_FIX:-false}" "${INPUT_DIFF:-false}" "${INPUT_RESOLVE:-false}"; do
+  case "$value" in true|false) ;; *) fail 'check, fix, diff, and resolve must be true or false' ;; esac
 done
+if [[ "${INPUT_FIX:-false}" == true && "${INPUT_DIFF:-false}" == true ]]; then
+  fail 'fix and diff cannot both be true'
+fi
 
 args=()
-if [[ "${INPUT_FIX:-false}" == true ]]; then
+if [[ "${INPUT_DIFF:-false}" == true ]]; then
+  # The Action defaults check to true, but a diff is its own CLI mode.
+  args+=(--diff)
+elif [[ "${INPUT_FIX:-false}" == true ]]; then
   args+=(--fix)
 else
   args+=(--check)
@@ -38,7 +44,7 @@ work_dir=$(mktemp -d)
 trap 'rm -rf -- "$work_dir"' EXIT
 
 if [[ "$version" == source ]]; then
-  printf 'Building action-pin from the selected action source\n'
+  printf 'Building action-pin from the selected action source\n' >&2
   # Use host build defaults even in a caller's cross-compilation job. Ignore
   # persisted Go settings, go.work and build flags. Run in the caller's directory.
   (
@@ -72,7 +78,7 @@ fi
 asset="action-pin_${version#v}_${os}_${arch}.${extension}"
 url="https://github.com/emirhan-karaca/action-pin/releases/download/${version}/${asset}"
 archive="$work_dir/$asset"
-printf 'Downloading action-pin %s for %s/%s\n' "$version" "$os" "$arch"
+printf 'Downloading action-pin %s for %s/%s\n' "$version" "$os" "$arch" >&2
 curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
   --retry 2 --connect-timeout 10 --max-time 120 --output "$archive" "$url"
 

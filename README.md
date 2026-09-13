@@ -24,7 +24,7 @@ Traditional regex-based or naive YAML re-formatters strip comments, reorder dict
 ### How `action-pin` Solves It
 - 🧠 **Format-Preserving**: Uses `gopkg.in/yaml.v3` node positions to edit ordinary single-line action references in place, preserving surrounding comments, spacing, quotes, and line endings. Complex scalar syntax (such as anchors, explicit tags, or multiline values) falls back to YAML encoding, which may normalize formatting.
 - 💬 **Human-Readable Annotations**: Automatically appends the original tag name as a comment: `# <tag> [pinned by action-pin]`.
-- 🔌 **Offline Checks**: Detects unpinned references without credentials or network access. Opt in to SHA suggestions with `--resolve`, or resolve and write with `--fix`.
+- 🔌 **Offline Checks & Reviewable Diffs**: Detects unpinned references without credentials or network access. Opt in to SHA suggestions with `--resolve`, preview a patch with `--diff`, or resolve and write with `--fix`.
 - ⚡ **Zero-Config & Resilient**: Resolves refs via GitHub REST API (supporting `GITHUB_TOKEN`), with an automated fallback to `git ls-remote` when rate-limited.
 - 🔁 **Fully Idempotent**: Safe to run on every commit or in pre-commit hooks.
 
@@ -56,7 +56,7 @@ Traditional regex-based or naive YAML re-formatters strip comments, reorder dict
 
 ### Installation
 
-The offline checks and `--resolve` examples below describe the current source and are not yet in v1.0.0. From a checkout containing these changes, try `go run ./cmd/action-pin --check`, or install that checkout with `go install ./cmd/action-pin`.
+The offline checks, `--resolve`, and `--diff` examples below describe the current source and are not yet in v1.0.0. From a checkout containing these changes, try `go run ./cmd/action-pin --check`, or install that checkout with `go install ./cmd/action-pin`.
 
 #### Pre-built Binaries (Linux, macOS, Windows)
 Download the latest binary for your operating system and architecture from [GitHub Releases](https://github.com/emirhan-karaca/action-pin/releases).
@@ -66,7 +66,7 @@ Download the latest binary for your operating system and architecture from [GitH
 go install github.com/emirhan-karaca/action-pin/cmd/action-pin@latest
 ```
 
-Release downloads and `@latest` use the latest published version. Until a new release includes these changes, its checks still resolve online and it does not accept `--resolve`.
+Release downloads and `@latest` use the latest published version. Until a new release includes these changes, its checks still resolve online and it does not accept `--resolve` or `--diff`.
 
 ---
 
@@ -95,6 +95,22 @@ action-pin --check --resolve
 
 This opt-in mode requires network access. Set `GITHUB_TOKEN` or `GH_TOKEN` when checking private repositories or to avoid unauthenticated API rate limits. Resolution errors fail the check.
 
+### Diff Mode (Reviewable Preview)
+Resolves unpinned references and writes the resulting unified patch to standard output without changing workflow files. A successful preview exits with code `0`, even when the patch contains changes. Summary messages and errors go to standard error, so the patch can be redirected safely:
+
+```bash
+action-pin --diff --dir .github/workflows > action-pin.patch
+```
+
+Review `action-pin.patch`, then apply it with a patch tool if desired. For example:
+
+```bash
+git apply --check action-pin.patch
+git apply action-pin.patch
+```
+
+`--diff` requires network access because it resolves references. It works with either `--dir` or `--file`, cannot be combined with `--check` or `--fix`, and makes `--resolve` redundant (although `--resolve` is accepted).
+
 ### Fix Mode (In-Place Update)
 Rewrites workflows in place, resolving tags to immutable 40-character commit SHAs:
 
@@ -109,16 +125,21 @@ Output:
 Success: Pinned 1 action(s) across 1 file(s) (Checked 1 file(s))
 ```
 
+For safety, `--fix` and `--diff` require regular workflow files and reject symlink workflow inputs and symlinked `--dir` roots. `--check` remains read-only and retains its existing path behavior.
+
+When a directory is targeted, fix mode first reads, parses, resolves, and stages every workflow change. If a read, YAML, reference-resolution, or staging step fails before replacement begins, all workflow files remain unchanged. Replacements are performed per file, so errors, cancellation, or concurrent source changes after replacement starts may leave earlier files updated. Each successful per-file write preserves that file's mode bits.
+
 ### CLI Flags Reference
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--check` | `false` | Check for unpinned actions offline (exits with code 1 if unpinned actions exist) |
 | `--fix` | `false` | Fix workflows in place by pinning actions to commit SHAs |
-| `--resolve` | `false` | Resolve suggested SHAs during checks; requires network access and is implied by `--fix` |
+| `--diff` | `false` | Write a unified patch without changing files; resolves references over the network and exits 0 after a successful preview, including when the patch is nonempty |
+| `--resolve` | `false` | Resolve suggested SHAs during checks; requires network access and is implied by `--fix` and `--diff` |
 | `--dir` | `.github/workflows` | Directory containing workflow files |
 | `--file` | `""` | Target a single workflow file (e.g. `--file .github/workflows/deploy.yml`) |
-| `--token` | `$GITHUB_TOKEN` | Token for `--fix` or `--resolve` (checks `--token`, `$GITHUB_TOKEN`, then `$GH_TOKEN`); unused by offline checks |
+| `--token` | `$GITHUB_TOKEN` | Token for `--fix`, `--diff`, or `--resolve` (checks `--token`, `$GITHUB_TOKEN`, then `$GH_TOKEN`); unused by offline checks |
 | `--verbose` | `false` | Enable verbose logging of inspected actions |
 | `--version` | `false` | Print version and build information |
 
@@ -157,6 +178,15 @@ jobs:
 
 The build may need network access to download Go modules on the first run; it uses the checkout's `go.mod` and `go.sum` with `-mod=readonly`. The resulting CLI check itself is offline. The Action ignores any `action-pin` binary already on `PATH` and runs in the caller's working directory, so `dir` remains relative to your repository.
 
+To preview the changes that pinning would make without writing workflows, enable the `diff` input:
+
+```yaml
+- name: Preview action pins
+  uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
+  with:
+    diff: 'true'
+```
+
 ### Using a Verified Release Binary
 
 To avoid building from source, select an exact release tag and provide the SHA-256 of its archive for your runner's operating system and architecture:
@@ -171,7 +201,7 @@ To avoid building from source, select an exact release tag and provide the SHA-2
 
 Review the release's `checksums.txt` and copy the matching archive digest into your workflow. A Linux amd64 archive is named `action-pin_1.0.0_linux_amd64.tar.gz`; Windows uses `.zip`. Each runner platform needs its own digest. The Action verifies the download before extraction or execution and fails on a missing or mismatched checksum. `latest` and branch names are rejected.
 
-Release mode runs that release's CLI behavior. In particular, v1.0.0 checks resolve references online and do not support `--resolve`; use source mode for the new offline behavior until it is included in a release.
+Release mode runs that release's CLI behavior. In particular, v1.0.0 resolves references online and does not support `--resolve` or `--diff`; use source mode for the new offline and preview behavior until it is included in a release.
 
 ### Action Inputs
 
@@ -179,13 +209,14 @@ Release mode runs that release's CLI behavior. In particular, v1.0.0 checks reso
 |-------|---------|-------------|
 | `check` | `'true'` | Fail workflow if unpinned actions are found |
 | `fix` | `'false'` | Automatically fix and pin actions in place |
+| `diff` | `'false'` | Resolve references and print a unified patch without changing files; requires network access |
 | `dir` | `'.github/workflows'` | Directory containing workflow files |
 | `token` | `${{ github.token }}` | GitHub token to avoid API rate limits |
 | `version` | `'source'` | Build the selected Action checkout, or download an exact release tag such as `v1.0.0` |
 | `checksum` | `''` | Required 64-character SHA-256 of the runner's release archive when `version` is a release tag; leave empty in source mode |
 | `resolve` | `'false'` | Resolve suggested SHAs in check mode; requires network access |
 
-`fix: 'true'` takes precedence over `check` and always resolves references. Otherwise the Action checks workflows, including when both `check` and `fix` are `'false'`. Boolean inputs accept only `'true'` or `'false'`.
+`fix: 'true'` takes precedence over `check` and always resolves references. Set `diff: 'true'` to run `--diff`; it overrides the default `check: 'true'`, requires network resolution, and leaves the CLI's standard output available for the patch. `fix: 'true'` and `diff: 'true'` cannot be combined. Otherwise the Action checks workflows, including when both `check` and `fix` are `'false'`. `resolve: 'true'` is redundant with diff but accepted. Boolean inputs accept only `'true'` or `'false'`.
 
 ---
 
@@ -196,7 +227,7 @@ Release mode runs that release's CLI behavior. In particular, v1.0.0 checks reso
 - **Local Actions**: Ignores relative paths like `./.github/actions/my-action`.
 - **Docker Actions**: Ignores `docker://` container actions.
 - **Reusable Workflows**: Seamlessly pins calls to external reusable workflows.
-- **Offline Checks / Rate-Limit Fallback**: Default checks do not use the network. During `--fix` or `--resolve`, GitHub API errors can fall back to `git ls-remote`, which also requires network access.
+- **Offline Checks / Rate-Limit Fallback**: Default checks do not use the network. During `--fix`, `--diff`, or `--resolve`, GitHub API errors can fall back to `git ls-remote`, which also requires network access.
 - **Performance Caching**: Caches resolved SHAs in-memory during execution to eliminate duplicate network calls.
 
 ---

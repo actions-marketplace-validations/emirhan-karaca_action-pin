@@ -21,6 +21,9 @@ import (
 const fakeBinary = `#!/usr/bin/env bash
 printf 'executed\nbinary-cwd=%s\n' "$(pwd -P)" >> "$TEST_LOG"
 printf 'binary-arg=%s\n' "$@" >> "$TEST_LOG"
+if [[ -n "${TEST_BINARY_STDOUT:-}" ]]; then
+  printf '%s' "$TEST_BINARY_STDOUT"
+fi
 exit "${TEST_BINARY_EXIT:-0}"
 `
 
@@ -181,24 +184,32 @@ func shellPath(path string) string {
 
 func (r *runner) run(t *testing.T, overrides map[string]string) (int, string, string) {
 	t.Helper()
+	code, stdout, stderr, log := r.runStreams(t, overrides)
+	return code, stdout + stderr, log
+}
+
+func (r *runner) runStreams(t *testing.T, overrides map[string]string) (int, string, string, string) {
+	t.Helper()
 	env := map[string]string{
-		"ACTION_PATH":      shellPath(r.source),
-		"INPUT_VERSION":    "v1.2.3",
-		"INPUT_CHECKSUM":   r.checksum,
-		"INPUT_CHECK":      "true",
-		"INPUT_FIX":        "false",
-		"INPUT_RESOLVE":    "false",
-		"INPUT_DIR":        "",
-		"TEST_OS":          "Linux",
-		"TEST_ARCH":        "x86_64",
-		"TEST_BIN":         shellPath(r.bin),
-		"TEST_SCRIPT":      shellPath(r.script),
-		"TEST_LOG":         shellPath(r.log),
-		"TEST_ARCHIVE":     shellPath(r.archive),
-		"TEST_BINARY":      shellPath(r.binary),
-		"TEST_BINARY_EXIT": "0",
-		"TEST_CURL_EXIT":   "0",
-		"TEST_GO_EXIT":     "0",
+		"ACTION_PATH":        shellPath(r.source),
+		"INPUT_VERSION":      "v1.2.3",
+		"INPUT_CHECKSUM":     r.checksum,
+		"INPUT_CHECK":        "true",
+		"INPUT_FIX":          "false",
+		"INPUT_DIFF":         "false",
+		"INPUT_RESOLVE":      "false",
+		"INPUT_DIR":          "",
+		"TEST_OS":            "Linux",
+		"TEST_ARCH":          "x86_64",
+		"TEST_BIN":           shellPath(r.bin),
+		"TEST_SCRIPT":        shellPath(r.script),
+		"TEST_LOG":           shellPath(r.log),
+		"TEST_ARCHIVE":       shellPath(r.archive),
+		"TEST_BINARY":        shellPath(r.binary),
+		"TEST_BINARY_EXIT":   "0",
+		"TEST_BINARY_STDOUT": "",
+		"TEST_CURL_EXIT":     "0",
+		"TEST_GO_EXIT":       "0",
 	}
 	for key, value := range overrides {
 		env[key] = value
@@ -216,9 +227,12 @@ func (r *runner) run(t *testing.T, overrides map[string]string) (int, string, st
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
-	output, err := cmd.CombinedOutput()
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
 	if ctx.Err() != nil {
-		t.Fatalf("runner timed out: %v\n%s", ctx.Err(), output)
+		t.Fatalf("runner timed out: %v\nstdout:\n%s\nstderr:\n%s", ctx.Err(), stdout.String(), stderr.String())
 	}
 	code := 0
 	if err != nil {
@@ -232,7 +246,7 @@ func (r *runner) run(t *testing.T, overrides map[string]string) (int, string, st
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatal(err)
 	}
-	return code, string(output), string(log)
+	return code, stdout.String(), stderr.String(), string(log)
 }
 
 func assertContains(t *testing.T, text, want string) {
@@ -314,6 +328,7 @@ func TestRunnerRejectsUnsafeInputs(t *testing.T) {
 		{"missing-digest", map[string]string{"INPUT_CHECKSUM": ""}, "requires the 64-character SHA-256 checksum", false},
 		{"latest", map[string]string{"INPUT_VERSION": "latest"}, "version must be source or an exact release tag", false},
 		{"source-with-checksum", map[string]string{"INPUT_VERSION": "source"}, "checksum is only valid with an exact release version", false},
+		{"invalid-diff", map[string]string{"INPUT_DIFF": "yes"}, "check, fix, diff, and resolve must be true or false", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newRunner(t, "linux")
@@ -363,6 +378,136 @@ func TestSourceBuildUsesSelectedAction(t *testing.T) {
 	assertContains(t, log, "binary-arg=--fix\nbinary-arg=--dir\nbinary-arg=workflows with spaces\n")
 	if strings.Contains(log, "path-binary-executed") || strings.Contains(log, "downloaded\n") {
 		t.Fatalf("source mode used PATH binary or downloaded a release:\n%s", log)
+	}
+}
+
+func TestDiffModeForwardsDiffInsteadOfDefaultCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{
+			name: "release",
+			overrides: map[string]string{
+				"INPUT_DIFF": "true", "INPUT_DIR": "workflows with spaces",
+			},
+		},
+		{
+			name: "source",
+			overrides: map[string]string{
+				"INPUT_VERSION": "source", "INPUT_CHECKSUM": "", "INPUT_DIFF": "true", "INPUT_DIR": "workflows with spaces",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRunner(t, "linux")
+			code, output, log := r.run(t, tc.overrides)
+			if code != 0 {
+				t.Fatalf("exit %d:\n%s\n%s", code, output, log)
+			}
+			assertContains(t, log, "binary-arg=--diff\nbinary-arg=--dir\nbinary-arg=workflows with spaces\n")
+			for _, unexpected := range []string{"binary-arg=--check\n", "binary-arg=--fix\n"} {
+				if strings.Contains(log, unexpected) {
+					t.Fatalf("diff mode forwarded %q unexpectedly:\n%s", strings.TrimSpace(unexpected), log)
+				}
+			}
+		})
+	}
+}
+
+func TestDiffModeKeepsLauncherOutputOffStdout(t *testing.T) {
+	patch := "--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n"
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]string
+		notice    string
+	}{
+		{
+			name:   "release",
+			notice: "Downloading action-pin v1.2.3 for linux/amd64\n",
+		},
+		{
+			name: "source",
+			overrides: map[string]string{
+				"INPUT_VERSION": "source", "INPUT_CHECKSUM": "",
+			},
+			notice: "Building action-pin from the selected action source\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRunner(t, "linux")
+			overrides := map[string]string{
+				"INPUT_DIFF":         "true",
+				"TEST_BINARY_STDOUT": patch,
+			}
+			for key, value := range tc.overrides {
+				overrides[key] = value
+			}
+			code, stdout, stderr, log := r.runStreams(t, overrides)
+			if code != 0 {
+				t.Fatalf("exit %d:\nstdout:\n%s\nstderr:\n%s\n%s", code, stdout, stderr, log)
+			}
+			if stdout != patch {
+				t.Fatalf("stdout = %q, want only the binary patch %q", stdout, patch)
+			}
+			assertContains(t, stderr, tc.notice)
+		})
+	}
+}
+
+func TestDiffModeAllowsRedundantResolve(t *testing.T) {
+	r := newRunner(t, "linux")
+	code, output, log := r.run(t, map[string]string{
+		"INPUT_DIFF": "true", "INPUT_RESOLVE": "true",
+	})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s\n%s", code, output, log)
+	}
+	assertContains(t, log, "binary-arg=--diff\nbinary-arg=--resolve\n")
+}
+
+func TestCheckFalseStillRunsCheck(t *testing.T) {
+	r := newRunner(t, "linux")
+	code, output, log := r.run(t, map[string]string{"INPUT_CHECK": "false"})
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s\n%s", code, output, log)
+	}
+	assertContains(t, log, "binary-arg=--check\n")
+	for _, unexpected := range []string{"binary-arg=--fix\n", "binary-arg=--diff\n"} {
+		if strings.Contains(log, unexpected) {
+			t.Fatalf("check=false forwarded %q unexpectedly:\n%s", strings.TrimSpace(unexpected), log)
+		}
+	}
+}
+
+func TestRunnerRejectsFixAndDiffBeforeBuildOrDownload(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		overrides map[string]string
+	}{
+		{
+			name:      "release",
+			overrides: map[string]string{"INPUT_FIX": "true", "INPUT_DIFF": "true"},
+		},
+		{
+			name: "source",
+			overrides: map[string]string{
+				"INPUT_VERSION": "source", "INPUT_CHECKSUM": "", "INPUT_FIX": "true", "INPUT_DIFF": "true",
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRunner(t, "linux")
+			code, output, log := r.run(t, tc.overrides)
+			if code == 0 {
+				t.Fatalf("fix and diff unexpectedly succeeded:\n%s", output)
+			}
+			assertContains(t, output, "fix and diff cannot both be true")
+			assertNotExecuted(t, log)
+			if strings.Contains(log, "built\n") || strings.Contains(log, "downloaded\n") {
+				t.Fatalf("invalid mode reached a build or download:\n%s", log)
+			}
+		})
 	}
 }
 

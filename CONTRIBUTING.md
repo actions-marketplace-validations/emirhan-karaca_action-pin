@@ -30,7 +30,7 @@ go test -v ./...
 go vet ./...
 ```
 
-The CLI and Action launcher tests use local resolver mocks and generated release archives, so they do not contact GitHub. Go may download modules during initial setup. Launcher tests skip when Bash is unavailable; the CI matrix includes Bash on Linux, macOS, and Windows.
+The CLI and Action launcher tests use local resolver mocks and generated release archives, so they do not contact GitHub. They cover check, fix, and diff argument handling, including the launcher's standard-output contract for patch previews. Go may download modules during initial setup. Launcher tests skip when Bash is unavailable; the CI matrix includes Bash on Linux, macOS, and Windows.
 
 ---
 
@@ -58,8 +58,13 @@ action-pin/
     ├── resolver/
     │   ├── resolver.go      # GitHub API and Git fallback ref resolution
     │   └── resolver_test.go # Resolver tests (mock API & git fallback)
+    ├── diff/
+    │   ├── diff.go          # Unified patch formatting
+    │   └── diff_test.go     # Patch format and git-apply tests
     └── pinner/
-        ├── pinner.go        # YAML AST traversal, line comment preservation
+        ├── pinner.go        # YAML AST traversal and line comment preservation
+        ├── plan.go          # Staged batch preparation and per-file replacement
+        ├── plan_test.go     # Planning, staging, and replacement tests
         └── pinner_test.go   # AST preservation and formatting tests
 ```
 
@@ -76,7 +81,10 @@ action-pin/
 3. **Fallback & Resiliency**:
    The resolver must gracefully handle GitHub API rate limits by falling back to `git ls-remote`.
 
-4. **Testing**:
+4. **Preview & Batch Writes**:
+   `--diff` writes only a unified patch to standard output; summaries and errors belong on standard error. Fix and diff require regular workflow files and reject symlink workflow inputs and symlinked `--dir` roots; check remains read-only. In fix mode, prepare every requested workflow before replacing any file. Read, YAML, resolution, or staging failures before replacement must leave the workflows unchanged. Replacements are per file, so errors, cancellation, or concurrent source changes after replacement starts may leave earlier files updated. Preserve each successfully written file's mode bits.
+
+5. **Testing**:
    - Every bug fix or new feature must include accompanying unit tests.
    - Run `go test -v ./...` before submitting a pull request.
    - Run `go vet ./...` to ensure clean Go code.
