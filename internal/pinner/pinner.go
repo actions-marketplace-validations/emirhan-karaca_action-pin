@@ -21,12 +21,12 @@ type Finding struct {
 	File         string `json:"file"`
 	Line         int    `json:"line"`
 	Column       int    `json:"column"`
-	Action       string `json:"action"`        // original uses: string (e.g. actions/checkout@v4)
-	Owner        string `json:"owner"`         // repo owner
-	Repo         string `json:"repo"`          // repo name
-	Ref          string `json:"ref"`           // tag or branch name
-	ResolvedSHA  string `json:"resolved_sha"`  // 40-char commit SHA
-	PinnedAction string `json:"pinned_action"` // new uses: string (e.g. actions/checkout@sha)
+	Action       string `json:"action"`                  // original uses: string (e.g. actions/checkout@v4)
+	Owner        string `json:"owner"`                   // repo owner
+	Repo         string `json:"repo"`                    // repo name
+	Ref          string `json:"ref"`                     // tag or branch name
+	ResolvedSHA  string `json:"resolved_sha,omitempty"`  // 40-char commit SHA, when resolution is enabled
+	PinnedAction string `json:"pinned_action,omitempty"` // new uses: string, when resolution is enabled
 }
 
 // Result summarizes a check or fix run across files.
@@ -40,16 +40,33 @@ type Result struct {
 // Pinner coordinates reading, AST traversing, resolving, and updating workflow files.
 type Pinner struct {
 	resolver resolver.Resolver
+	resolve  bool
 }
 
-// New creates a new Pinner with the provided resolver.
-func New(r resolver.Resolver) *Pinner {
-	return &Pinner{resolver: r}
+// Option configures a Pinner.
+type Option func(*Pinner)
+
+// WithResolve enables resolving suggested SHAs in check mode. Fix mode always resolves.
+func WithResolve(resolve bool) Option {
+	return func(p *Pinner) {
+		p.resolve = resolve
+	}
+}
+
+// New creates a new Pinner. Checks are offline unless WithResolve(true) is used.
+// The resolver may be nil when only performing offline checks.
+func New(r resolver.Resolver, opts ...Option) *Pinner {
+	p := &Pinner{resolver: r}
+	for _, opt := range opts {
+		opt(p)
+	}
+	return p
 }
 
 // ProcessContent processes YAML content, identifying and optionally pinning actions.
 // If fix is true and unpinned actions are found, it returns the updated YAML content.
 // If fix is false or no changes are made, it returns the original content.
+// Offline checks identify unpinned refs without verifying that the repository or ref exists.
 func (p *Pinner) ProcessContent(ctx context.Context, filename string, content []byte, fix bool) ([]byte, []Finding, error) {
 	if len(bytes.TrimSpace(content)) == 0 {
 		return content, nil, nil
@@ -119,28 +136,31 @@ func (p *Pinner) traverseAndPin(ctx context.Context, filename string, node *yaml
 				if keyNode.Kind == yaml.ScalarNode && keyNode.Value == "uses" && valNode.Kind == yaml.ScalarNode {
 					actRef, err := action.Parse(valNode.Value)
 					if err == nil && !actRef.IsLocal && !actRef.IsDocker && !actRef.IsDynamic && !actRef.IsPinned {
-						// Found an unpinned remote action
-						sha, err := p.resolver.Resolve(ctx, actRef.Owner, actRef.Repo, actRef.Ref)
-						if err != nil {
-							return fmt.Errorf("resolving %s on line %d in %s: %w", valNode.Value, valNode.Line, filename, err)
-						}
-
 						finding := Finding{
-							File:         filepath.ToSlash(filename),
-							Line:         valNode.Line,
-							Column:       valNode.Column,
-							Action:       valNode.Value,
-							Owner:        actRef.Owner,
-							Repo:         actRef.Repo,
-							Ref:          actRef.Ref,
-							ResolvedSHA:  sha,
-							PinnedAction: actRef.PinnedString(sha),
+							File:   filepath.ToSlash(filename),
+							Line:   valNode.Line,
+							Column: valNode.Column,
+							Action: valNode.Value,
+							Owner:  actRef.Owner,
+							Repo:   actRef.Repo,
+							Ref:    actRef.Ref,
+						}
+						if fix || p.resolve {
+							if p.resolver == nil {
+								return fmt.Errorf("resolving %s on line %d in %s: no resolver configured", valNode.Value, valNode.Line, filename)
+							}
+							sha, err := p.resolver.Resolve(ctx, actRef.Owner, actRef.Repo, actRef.Ref)
+							if err != nil {
+								return fmt.Errorf("resolving %s on line %d in %s: %w", valNode.Value, valNode.Line, filename, err)
+							}
+							finding.ResolvedSHA = sha
+							finding.PinnedAction = actRef.PinnedString(sha)
 						}
 						findings = append(findings, finding)
 
 						if fix {
-							*edits = append(*edits, sourceEdit{node: *valNode, value: actRef.PinnedString(sha), comment: actRef.Comment()})
-							valNode.Value = actRef.PinnedString(sha)
+							*edits = append(*edits, sourceEdit{node: *valNode, value: finding.PinnedAction, comment: actRef.Comment()})
+							valNode.Value = finding.PinnedAction
 							if valNode.LineComment == "" {
 								valNode.LineComment = actRef.Comment()
 							} else {

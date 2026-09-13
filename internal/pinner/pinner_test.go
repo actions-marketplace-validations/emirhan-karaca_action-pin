@@ -15,6 +15,7 @@ import (
 
 type mockResolver struct {
 	mapping map[string]string
+	calls   []string
 }
 
 func TestPinner_ExactSourcePreservation(t *testing.T) {
@@ -70,6 +71,7 @@ func TestPinner_ComplexScalarFallbackPreservesComments(t *testing.T) {
 
 func (m *mockResolver) Resolve(ctx context.Context, owner, repo, ref string) (string, error) {
 	key := fmt.Sprintf("%s/%s@%s", owner, repo, ref)
+	m.calls = append(m.calls, key)
 	if sha, ok := m.mapping[key]; ok {
 		return sha, nil
 	}
@@ -137,13 +139,16 @@ jobs:
 		t.Fatalf("expected 3 findings, got %d", len(findings))
 	}
 
-	if findings[0].Action != "actions/checkout@v4" || findings[0].ResolvedSHA != "b4ffde65f46336ab88eb53be808477a3936bae11" {
+	if len(resolver.calls) != 0 {
+		t.Fatalf("offline check called resolver: %v", resolver.calls)
+	}
+	if findings[0].Action != "actions/checkout@v4" || findings[0].ResolvedSHA != "" {
 		t.Errorf("unexpected finding[0]: %+v", findings[0])
 	}
-	if findings[1].Action != "actions/setup-go@v5" || findings[1].ResolvedSHA != "0a12ed9d6a96ab950c8f5ff42f17e3e293d2eab0" {
+	if findings[1].Action != "actions/setup-go@v5" || findings[1].ResolvedSHA != "" {
 		t.Errorf("unexpected finding[1]: %+v", findings[1])
 	}
-	if findings[2].Action != "actions/cache/restore@v3" || findings[2].ResolvedSHA != "dacf3200ff73ea515d96a79eefffa1cc3a0bfa99" {
+	if findings[2].Action != "actions/cache/restore@v3" || findings[2].ResolvedSHA != "" {
 		t.Errorf("unexpected finding[2]: %+v", findings[2])
 	}
 
@@ -424,5 +429,97 @@ jobs:
 	}
 	if !strings.Contains(fixedStr, `uses: 'actions/setup-go@0a12ed9d6a96ab950c8f5ff42f17e3e293d2eab0' # v5 [pinned by action-pin]`) {
 		t.Errorf("single quote style not preserved:\n%s", fixedStr)
+	}
+}
+
+func TestPinner_OfflineCheckReportsUnresolvableRefs(t *testing.T) {
+	const input = "jobs:\n  test:\n    steps:\n      - uses: nonexistent-owner/nonexistent-repo@missing-tag\n      - uses: actions/cache/restore@not-a-real-branch\n      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11\n      - uses: ./local\n      - uses: docker://alpine:3\n      - uses: actions/checkout@${{ matrix.ref }}\n"
+	res := &mockResolver{} // Every resolution would fail.
+	p := pinner.New(res)
+	output, findings, err := p.ProcessContent(context.Background(), "ci.yml", []byte(input), false)
+	if err != nil {
+		t.Fatalf("offline check failed: %v", err)
+	}
+	if len(res.calls) != 0 {
+		t.Fatalf("offline check attempted resolution: %v", res.calls)
+	}
+	if string(output) != input {
+		t.Fatal("check changed source content")
+	}
+	if len(findings) != 2 {
+		t.Fatalf("got %d findings, want 2", len(findings))
+	}
+	if findings[0].Line != 4 || findings[0].Ref != "missing-tag" || findings[1].Action != "actions/cache/restore@not-a-real-branch" {
+		t.Fatalf("unexpected findings: %+v", findings)
+	}
+	for _, finding := range findings {
+		if finding.ResolvedSHA != "" || finding.PinnedAction != "" {
+			t.Errorf("offline finding has a suggested pin: %+v", finding)
+		}
+	}
+
+	// No resolver is needed at all for this mode.
+	if _, _, err := pinner.New(nil).ProcessContent(context.Background(), "ci.yml", []byte(input), false); err != nil {
+		t.Fatalf("check without a resolver failed: %v", err)
+	}
+}
+
+func TestPinner_ResolveOption(t *testing.T) {
+	const sha = "b4ffde65f46336ab88eb53be808477a3936bae11"
+	const input = "uses: actions/cache/restore@v4 # retain me\n"
+	for _, tc := range []struct {
+		name    string
+		resolve bool
+		fix     bool
+	}{
+		{name: "check-with-resolution", resolve: true},
+		{name: "fix-always-resolves", fix: true},
+		{name: "fix-with-redundant-resolution", resolve: true, fix: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := &mockResolver{mapping: map[string]string{"actions/cache@v4": sha}}
+			p := pinner.New(res, pinner.WithResolve(tc.resolve))
+			output, findings, err := p.ProcessContent(context.Background(), "ci.yml", []byte(input), tc.fix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.calls) != 1 || res.calls[0] != "actions/cache@v4" {
+				t.Fatalf("unexpected resolution calls: %v", res.calls)
+			}
+			if len(findings) != 1 || findings[0].ResolvedSHA != sha || findings[0].PinnedAction != "actions/cache/restore@"+sha {
+				t.Fatalf("unexpected resolved findings: %+v", findings)
+			}
+			if tc.fix {
+				if !strings.Contains(string(output), "uses: actions/cache/restore@"+sha+" # retain me; v4 [pinned by action-pin]") {
+					t.Fatalf("unexpected pinned output: %s", output)
+				}
+			} else if string(output) != input {
+				t.Fatal("resolved check changed source content")
+			}
+		})
+	}
+}
+
+func TestPinner_ResolutionFailureDoesNotWriteFile(t *testing.T) {
+	const input = "uses: nonexistent-owner/nonexistent-repo@missing-tag\n"
+	for _, fix := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fix=%t", fix), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ci.yml")
+			if err := os.WriteFile(path, []byte(input), 0644); err != nil {
+				t.Fatal(err)
+			}
+			p := pinner.New(&mockResolver{}, pinner.WithResolve(true))
+			_, modified, err := p.ProcessFile(context.Background(), path, fix)
+			if err == nil || !strings.Contains(err.Error(), "ref not found") {
+				t.Fatalf("expected resolution failure, got %v", err)
+			}
+			output, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if modified || string(output) != input {
+				t.Fatal("failed resolution changed file")
+			}
+		})
 	}
 }
