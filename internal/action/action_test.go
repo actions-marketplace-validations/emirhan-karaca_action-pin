@@ -3,7 +3,7 @@ package action_test
 import (
 	"testing"
 
-	"github.com/emirhan-karaca/action-pin/internal/action"
+	"github.com/emirhan-karaca/action-pin/v2/internal/action"
 )
 
 func TestParse(t *testing.T) {
@@ -23,46 +23,46 @@ func TestParse(t *testing.T) {
 		wantComment   string
 	}{
 		{
-			name:         "standard tag reference",
-			input:        "actions/checkout@v4",
-			wantOwner:    "actions",
-			wantRepo:     "checkout",
-			wantSubPath:  "",
-			wantRef:      "v4",
-			wantLocal:    false,
-			wantDocker:   false,
-			wantPinned:   false,
-			wantErr:      false,
+			name:          "standard tag reference",
+			input:         "actions/checkout@v4",
+			wantOwner:     "actions",
+			wantRepo:      "checkout",
+			wantSubPath:   "",
+			wantRef:       "v4",
+			wantLocal:     false,
+			wantDocker:    false,
+			wantPinned:    false,
+			wantErr:       false,
 			wantPinnedStr: "actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11",
-			wantComment:  "# v4 [pinned by action-pin]",
+			wantComment:   "# v4 [pinned by action-pin]",
 		},
 		{
-			name:         "subpath in repo",
-			input:        "actions/cache/restore@v3.2.1",
-			wantOwner:    "actions",
-			wantRepo:     "cache",
-			wantSubPath:  "restore",
-			wantRef:      "v3.2.1",
-			wantLocal:    false,
-			wantDocker:   false,
-			wantPinned:   false,
-			wantErr:      false,
+			name:          "subpath in repo",
+			input:         "actions/cache/restore@v3.2.1",
+			wantOwner:     "actions",
+			wantRepo:      "cache",
+			wantSubPath:   "restore",
+			wantRef:       "v3.2.1",
+			wantLocal:     false,
+			wantDocker:    false,
+			wantPinned:    false,
+			wantErr:       false,
 			wantPinnedStr: "actions/cache/restore@b4ffde65f46336ab88eb53be808477a3936bae11",
-			wantComment:  "# v3.2.1 [pinned by action-pin]",
+			wantComment:   "# v3.2.1 [pinned by action-pin]",
 		},
 		{
-			name:         "nested subpath workflow",
-			input:        "owner/repo/.github/workflows/reusable.yml@main",
-			wantOwner:    "owner",
-			wantRepo:     "repo",
-			wantSubPath:  ".github/workflows/reusable.yml",
-			wantRef:      "main",
-			wantLocal:    false,
-			wantDocker:   false,
-			wantPinned:   false,
-			wantErr:      false,
+			name:          "nested subpath workflow",
+			input:         "owner/repo/.github/workflows/reusable.yml@main",
+			wantOwner:     "owner",
+			wantRepo:      "repo",
+			wantSubPath:   ".github/workflows/reusable.yml",
+			wantRef:       "main",
+			wantLocal:     false,
+			wantDocker:    false,
+			wantPinned:    false,
+			wantErr:       false,
 			wantPinnedStr: "owner/repo/.github/workflows/reusable.yml@b4ffde65f46336ab88eb53be808477a3936bae11",
-			wantComment:  "# main [pinned by action-pin]",
+			wantComment:   "# main [pinned by action-pin]",
 		},
 		{
 			name:        "already pinned 40-char commit SHA",
@@ -193,7 +193,7 @@ func TestIsCommitSHA(t *testing.T) {
 	}{
 		{"b4ffde65f46336ab88eb53be808477a3936bae11", true},
 		{"B4FFDE65F46336AB88EB53BE808477A3936BAE11", true},
-		{"b4ffde65f46336ab88eb53be808477a3936bae1", false},  // 39 chars
+		{"b4ffde65f46336ab88eb53be808477a3936bae1", false},   // 39 chars
 		{"b4ffde65f46336ab88eb53be808477a3936bae111", false}, // 41 chars
 		{"v4", false},
 		{"v4.0.0", false},

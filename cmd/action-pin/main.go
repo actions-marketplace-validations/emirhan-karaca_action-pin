@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"sort"
 
-	"github.com/emirhan-karaca/action-pin/internal/diff"
-	"github.com/emirhan-karaca/action-pin/internal/pinner"
-	"github.com/emirhan-karaca/action-pin/internal/resolver"
+	"github.com/emirhan-karaca/action-pin/v2/internal/diff"
+	"github.com/emirhan-karaca/action-pin/v2/internal/pinner"
+	"github.com/emirhan-karaca/action-pin/v2/internal/resolver"
 )
 
 var (

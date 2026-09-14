@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/emirhan-karaca/action-pin/internal/resolver"
+	"github.com/emirhan-karaca/action-pin/v2/internal/resolver"
 )
 
 func TestResolve_RefURLCharacters(t *testing.T) {

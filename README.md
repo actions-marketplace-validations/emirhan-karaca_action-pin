@@ -1,7 +1,7 @@
 # action-pin 📌
 
 [![CI](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml/badge.svg)](https://github.com/emirhan-karaca/action-pin/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/emirhan-karaca/action-pin.svg)](https://pkg.go.dev/github.com/emirhan-karaca/action-pin)
+[![Go Reference](https://pkg.go.dev/badge/github.com/emirhan-karaca/action-pin/v2.svg)](https://pkg.go.dev/github.com/emirhan-karaca/action-pin/v2)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://go.dev)
 [![Release](https://img.shields.io/github/v/release/emirhan-karaca/action-pin?logo=github)](https://github.com/emirhan-karaca/action-pin/releases)
@@ -56,17 +56,17 @@ Traditional regex-based or naive YAML re-formatters strip comments, reorder dict
 
 ### Installation
 
-The offline checks, `--resolve`, and `--diff` examples below describe the current source and are not yet in v1.0.0. From a checkout containing these changes, try `go run ./cmd/action-pin --check`, or install that checkout with `go install ./cmd/action-pin`.
+Version 2.0.0 introduces offline checks, `--resolve`, and `--diff`. Install that release, or build from a checkout with `go run ./cmd/action-pin --check`.
 
 #### Pre-built Binaries (Linux, macOS, Windows)
 Download the latest binary for your operating system and architecture from [GitHub Releases](https://github.com/emirhan-karaca/action-pin/releases).
 
 #### Via Go Install
 ```bash
-go install github.com/emirhan-karaca/action-pin/cmd/action-pin@latest
+go install github.com/emirhan-karaca/action-pin/v2/cmd/action-pin@v2.0.0
 ```
 
-Release downloads and `@latest` use the latest published version. Until a new release includes these changes, its checks still resolve online and it does not accept `--resolve` or `--diff`.
+Use the `/v2` module path for Go installs. The v2.0.0 release contains the offline check, `--resolve`, and `--diff` behavior described below.
 
 ---
 
@@ -149,9 +149,9 @@ When a directory is targeted, fix mode first reads, parses, resolves, and stages
 
 ## GitHub Action Integration (1-Line CI)
 
-Integrate `action-pin` directly into your CI pipeline using the composite Action. By default, it builds the source from the selected Action checkout with Go 1.22 or newer. Pinning the Action to a full commit SHA therefore also selects the program source being executed.
+Integrate `action-pin` directly into your CI pipeline using the composite Action. Since v2.0.0, the default `source` mode builds the selected Action checkout with Go 1.22 or newer. Pinning the Action to a full commit SHA therefore also selects the program source being executed.
 
-The inputs below describe the current source. Older releases, including v1.0.0, have different defaults. Replace `REPLACE_WITH_FULL_COMMIT_SHA` with a reviewed 40-character commit SHA containing these changes. Ensure a supported Go toolchain is available on your runner before this step.
+The examples use the reviewed source commit that contains the v2.0.0 behavior. Ensure a supported Go toolchain is available on your runner before this step.
 
 ```yaml
 name: Security & Pinning Check
@@ -173,7 +173,7 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 [pinned by action-pin]
 
       - name: Verify all actions are pinned
-        uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
+        uses: emirhan-karaca/action-pin@985eb2f69b6c1f147f630ec16f9b9a16cf62c7c5 # reviewed v2.0.0 source
 ```
 
 The build may need network access to download Go modules on the first run; it uses the checkout's `go.mod` and `go.sum` with `-mod=readonly`. The resulting CLI check itself is offline. The Action ignores any `action-pin` binary already on `PATH` and runs in the caller's working directory, so `dir` remains relative to your repository.
@@ -182,7 +182,7 @@ To preview the changes that pinning would make without writing workflows, enable
 
 ```yaml
 - name: Preview action pins
-  uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
+  uses: emirhan-karaca/action-pin@985eb2f69b6c1f147f630ec16f9b9a16cf62c7c5 # reviewed v2.0.0 source
   with:
     diff: 'true'
 ```
@@ -193,15 +193,21 @@ To avoid building from source, select an exact release tag and provide the SHA-2
 
 ```yaml
 - name: Verify all actions are pinned
-  uses: emirhan-karaca/action-pin@REPLACE_WITH_FULL_COMMIT_SHA
+  uses: emirhan-karaca/action-pin@985eb2f69b6c1f147f630ec16f9b9a16cf62c7c5 # reviewed v2.0.0 source
   with:
-    version: 'v1.0.0'
+    version: 'v2.0.0'
     checksum: 'REPLACE_WITH_64_CHARACTER_ARCHIVE_SHA256'
 ```
 
-Review the release's `checksums.txt` and copy the matching archive digest into your workflow. A Linux amd64 archive is named `action-pin_1.0.0_linux_amd64.tar.gz`; Windows uses `.zip`. Each runner platform needs its own digest. The Action verifies the download before extraction or execution and fails on a missing or mismatched checksum. `latest` and branch names are rejected.
+Review the v2.0.0 release's `checksums.txt` and copy the matching archive digest into your workflow. A Linux amd64 archive is named `action-pin_2.0.0_linux_amd64.tar.gz`; Windows uses `.zip`. Each runner platform needs its own digest. The Action verifies the download before extraction or execution and fails on a missing or mismatched checksum. `latest` and branch names are rejected.
 
-Release mode runs that release's CLI behavior. In particular, v1.0.0 resolves references online and does not support `--resolve` or `--diff`; use source mode for the new offline and preview behavior until it is included in a release.
+Release mode runs the selected release's CLI behavior. Version 2.0.0 supports offline checks, `--resolve`, and `--diff`.
+
+### Migrating from v1.x
+
+Go installs now use the major-version module path: `github.com/emirhan-karaca/action-pin/v2/cmd/action-pin@v2.0.0`. The v2 Action defaults to a source build, so runners need Go 1.22 or newer. To use a release binary instead, set an exact release tag such as `v2.0.0` and provide the matching platform archive checksum.
+
+The v1.0.x Action used its older `latest` binary-selection behavior and has no source-mode/checksum contract. Its CLI checks resolve references online and it does not support `--resolve` or `--diff`. Keep v1.x workflows on their existing configuration, or migrate them to the v2 inputs above.
 
 ### Action Inputs
 
@@ -212,7 +218,7 @@ Release mode runs that release's CLI behavior. In particular, v1.0.0 resolves re
 | `diff` | `'false'` | Resolve references and print a unified patch without changing files; requires network access |
 | `dir` | `'.github/workflows'` | Directory containing workflow files |
 | `token` | `${{ github.token }}` | GitHub token to avoid API rate limits |
-| `version` | `'source'` | Build the selected Action checkout, or download an exact release tag such as `v1.0.0` |
+| `version` | `'source'` | Build the selected Action checkout, or download an exact release tag such as `v2.0.0` |
 | `checksum` | `''` | Required 64-character SHA-256 of the runner's release archive when `version` is a release tag; leave empty in source mode |
 | `resolve` | `'false'` | Resolve suggested SHAs in check mode; requires network access |
 

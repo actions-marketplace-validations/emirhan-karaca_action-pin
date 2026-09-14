@@ -12,8 +12,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/emirhan-karaca/action-pin/internal/action"
-	"github.com/emirhan-karaca/action-pin/internal/resolver"
+	"github.com/emirhan-karaca/action-pin/v2/internal/action"
+	"github.com/emirhan-karaca/action-pin/v2/internal/resolver"
 )
 
 // Finding describes an unpinned action found in a workflow.

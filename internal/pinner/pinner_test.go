@@ -10,7 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/emirhan-karaca/action-pin/internal/pinner"
+	"github.com/emirhan-karaca/action-pin/v2/internal/pinner"
 )
 
 type mockResolver struct {

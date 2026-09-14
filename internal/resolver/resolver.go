@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/emirhan-karaca/action-pin/internal/action"
+	"github.com/emirhan-karaca/action-pin/v2/internal/action"
 )
 
 // Resolver resolves a GitHub action owner/repo and ref to a 40-character commit SHA.
